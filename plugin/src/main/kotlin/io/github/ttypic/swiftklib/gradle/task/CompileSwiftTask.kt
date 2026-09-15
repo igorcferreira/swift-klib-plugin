@@ -12,19 +12,23 @@ import org.gradle.api.tasks.Internal
 import org.gradle.api.tasks.Optional
 import org.gradle.api.tasks.OutputDirectory
 import org.gradle.api.tasks.OutputFile
+import org.gradle.api.tasks.PathSensitive
+import org.gradle.api.tasks.PathSensitivity
 import org.gradle.api.tasks.TaskAction
 import org.gradle.process.ExecOperations
+import org.gradle.work.DisableCachingByDefault
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.math.BigInteger
 import java.security.MessageDigest
 import javax.inject.Inject
 
+@DisableCachingByDefault(because = "The generated def file embeds absolute paths, so it can't be relocated")
 abstract class CompileSwiftTask @Inject constructor(
     @Input val cinteropName: String,
     @Input val compileTarget: CompileTarget,
     @Input val buildDirectory: String,
-    @InputDirectory val pathProperty: Property<File>,
+    @InputDirectory @PathSensitive(PathSensitivity.RELATIVE) val pathProperty: Property<File>,
     @Input val packageNameProperty: Property<String>,
     @Optional @Input val minIosProperty: Property<Int>,
     @Optional @Input val minMacosProperty: Property<Int>,
@@ -66,9 +70,11 @@ abstract class CompileSwiftTask @Inject constructor(
         )
     }
 
-    private val minIos get() = minIosProperty.getOrElse(13)
-    private val minMacos get() = minMacosProperty.getOrElse(11)
-    private val minTvos get() = minTvosProperty.getOrElse(13)
+    // Defaults track the oldest deployment targets still accepted by current Xcode releases;
+    // anything lower is rejected outright ("the range of supported deployment target versions is ...").
+    private val minIos get() = minIosProperty.getOrElse(15)
+    private val minMacos get() = minMacosProperty.getOrElse(12)
+    private val minTvos get() = minTvosProperty.getOrElse(15)
     private val minWatchos get() = minWatchosProperty.getOrElse(8)
 
     /**
@@ -96,15 +102,13 @@ abstract class CompileSwiftTask @Inject constructor(
     }
 
     private fun buildSwift(xcodeVersion: Int): SwiftBuildResult {
+        val usesSwiftBuildEngine = xcodeVersion >= SWIFT_BUILD_ENGINE_XCODE_VERSION
         val sourceFilePathReplacements = mapOf(
             buildDir().absolutePath to pathProperty.get().absolutePath
         )
-        val extraArgs = if (xcodeVersion >= 15 && compileTarget in SDKLESS_TARGETS) {
-            additionalSysrootArgs()
-        } else {
-            emptyList()
-        }
-        val args = generateBuildArgs() + extraArgs
+        val args =
+            if (usesSwiftBuildEngine) swiftBuildEngineArgs()
+            else nativeBuildSystemArgs(xcodeVersion)
 
         logger.info("-- Running swift build --")
         logger.info("Working directory: $swiftBuildDir")
@@ -124,27 +128,96 @@ abstract class CompileSwiftTask @Inject constructor(
             )
         }
 
-        val releaseBuildPath = File(swiftBuildDir, ".build/${compileTarget.arch()}-apple-macosx/release")
-
-        return SwiftBuildResult(
-            libPath = File(releaseBuildPath, "lib${cinteropName}.a"),
-            headerPath = File(releaseBuildPath, "$cinteropName.build/$cinteropName-Swift.h")
-        )
+        return if (usesSwiftBuildEngine) swiftBuildEngineResult()
+        else nativeBuildSystemResult()
     }
 
-    private fun generateBuildArgs(): List<String> {
-        val sdkPath = readSdkPath()
+    /**
+     * Build arguments for the Swift Build engine, which SwiftPM defaults to from Xcode 27 onwards.
+     *
+     * The destination has to be declared through SwiftPM's own `--sdk`/`--triple` options. Passing
+     * it via `-Xswiftc` (as [nativeBuildSystemArgs] does) no longer works: Swift Build emits user
+     * flags first and appends its own host destination afterwards, so `swiftc` ends up compiling
+     * against the macOS SDK while clang keeps the iOS sysroot.
+     */
+    private fun swiftBuildEngineArgs(): List<String> = listOf(
+        "swift",
+        "build",
+        "-c",
+        "release",
+        "--sdk",
+        readSdkPath(),
+        // `--triple` is mutually exclusive with `--arch`, and already carries the architecture.
+        "--triple",
+        compileTarget.asSwiftcTarget(compileTarget.operatingSystem()),
+    )
+
+    private fun nativeBuildSystemArgs(xcodeVersion: Int): List<String> {
         val baseArgs = "swift build --arch ${compileTarget.arch()} -c release".split(" ")
 
         val xcrunArgs = listOf(
             "-sdk",
-            sdkPath,
+            readSdkPath(),
             "-target",
             compileTarget.asSwiftcTarget(compileTarget.operatingSystem()),
         ).asSwiftcArgs()
 
-        return baseArgs + xcrunArgs
+        val extraArgs = if (xcodeVersion >= 15 && compileTarget in SDKLESS_TARGETS) {
+            additionalSysrootArgs()
+        } else {
+            emptyList()
+        }
+
+        return baseArgs + xcrunArgs + extraArgs
     }
+
+    /**
+     * Locates the products of a Swift Build engine run, which uses Xcode's output layout rather
+     * than the native build system's `.build/<arch>-apple-macosx/release` directory.
+     */
+    private fun swiftBuildEngineResult(): SwiftBuildResult {
+        val outDir = File(swiftBuildDir, ".build/out")
+
+        val productsDir = File(outDir, "Products")
+        val libPath = productsDir.walkTopDown().firstOrNull { it.name == libName() }
+            ?: throw IllegalStateException("Can't find ${libName()} in $productsDir")
+
+        // The generated Objective-C header and its module map land in a per-platform
+        // `GeneratedModuleMaps-<sdk>` directory (plain `GeneratedModuleMaps` when building for the host).
+        val intermediatesDir = File(outDir, "Intermediates.noindex")
+        val moduleDir = intermediatesDir
+            .listFiles { file -> file.isDirectory && file.name.startsWith(GENERATED_MODULE_MAPS_DIR_PREFIX) }
+            ?.singleOrNull()
+            ?: throw IllegalStateException(
+                "Can't find a single $GENERATED_MODULE_MAPS_DIR_PREFIX* directory in $intermediatesDir"
+            )
+
+        // Swift Build names the module map after the module, but the clang that cinterop runs only
+        // auto-discovers a map called `module.modulemap` inside an include directory.
+        File(moduleDir, "$cinteropName.modulemap")
+            .copyTo(File(moduleDir, "module.modulemap"), overwrite = true)
+
+        return SwiftBuildResult(
+            libPath = libPath,
+            headerPath = File(moduleDir, "$cinteropName-Swift.h"),
+        )
+    }
+
+    private fun nativeBuildSystemResult(): SwiftBuildResult {
+        val releaseBuildPath = File(swiftBuildDir, ".build/${compileTarget.arch()}-apple-macosx/release")
+        val moduleDir = File(releaseBuildPath, "$cinteropName.build")
+
+        // Newer SwiftPM releases emit the generated header and `module.modulemap` into an `include`
+        // subdirectory; older ones write the header directly into the module directory.
+        val headerDir = File(moduleDir, "include").takeIf { it.isDirectory } ?: moduleDir
+
+        return SwiftBuildResult(
+            libPath = File(releaseBuildPath, libName()),
+            headerPath = File(headerDir, "$cinteropName-Swift.h"),
+        )
+    }
+
+    private fun libName() = "lib${cinteropName}.a"
 
     /** Workaround for bug in toolchain where the sdk path (via `swiftc -sdk` flag) is not propagated to clang. */
     private fun additionalSysrootArgs(): List<String> =
@@ -273,6 +346,14 @@ private data class SwiftBuildResult(
     val libPath: File,
     val headerPath: File,
 )
+
+/**
+ * First Xcode version whose SwiftPM defaults to the Swift Build engine rather than the (now
+ * deprecated) native build system. The two use different command line options and output layouts.
+ */
+private const val SWIFT_BUILD_ENGINE_XCODE_VERSION = 27
+
+private const val GENERATED_MODULE_MAPS_DIR_PREFIX = "GeneratedModuleMaps"
 
 val SDKLESS_TARGETS = listOf(
     CompileTarget.iosX64,

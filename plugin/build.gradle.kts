@@ -9,9 +9,11 @@ dependencies {
     implementation(libs.plugin.kotlin)
 
     testImplementation(gradleTestKit())
+    testImplementation(platform(libs.test.junit.bom))
     testImplementation(libs.test.junit.jupiter)
     testImplementation(libs.test.kotest.assertions)
-    testRuntimeOnly(libs.test.junit.jupiter.launcher)
+    // Gradle 9 no longer puts the JUnit Platform launcher on the test runtime classpath for us.
+    testRuntimeOnly(libs.test.junit.platform.launcher)
 }
 
 tasks.named<Test>("test") {
@@ -22,7 +24,7 @@ version = "0.7.0-SNAPSHOT"
 group = "io.github.ttypic"
 
 kotlin {
-    jvmToolchain(17)
+    jvmToolchain(21)
 }
 
 @Suppress("UnstableApiUsage")

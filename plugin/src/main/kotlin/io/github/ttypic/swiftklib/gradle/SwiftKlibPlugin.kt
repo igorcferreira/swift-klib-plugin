@@ -5,9 +5,9 @@ import org.gradle.api.NamedDomainObjectContainer
 import org.gradle.api.Plugin
 import org.gradle.api.Project
 import org.gradle.api.model.ObjectFactory
-import org.gradle.configurationcache.extensions.capitalized
 import org.jetbrains.kotlin.gradle.tasks.CInteropProcess
 import org.jetbrains.kotlin.konan.target.HostManager
+import java.util.Locale
 
 const val EXTENSION_NAME = "swiftklib"
 
@@ -70,3 +70,7 @@ class SwiftKlibPlugin : Plugin<Project> {
 
 private fun getTaskName(cinteropName: String, cinteropTarget: CompileTarget) =
     "${EXTENSION_NAME}${cinteropName.capitalized()}${cinteropTarget.name.capitalized()}"
+
+/** Replaces `org.gradle.configurationcache.extensions.capitalized`, removed in Gradle 9. */
+private fun String.capitalized() =
+    replaceFirstChar { if (it.isLowerCase()) it.titlecase(Locale.ROOT) else it.toString() }

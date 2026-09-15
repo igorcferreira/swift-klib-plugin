@@ -1,9 +1,9 @@
 [versions]
-kotlin = "2.0.0"
+kotlin = "2.4.20"
 
-gradlePublishPlugin = "1.2.1"
+gradlePublishPlugin = "2.2.1"
 
-junit-jupiter = "5.8.0"
+junit = "5.14.4"
 
 kotest = "5.9.1"
 
@@ -11,8 +11,9 @@ kotest = "5.9.1"
 
 plugin-kotlin = { module = "org.jetbrains.kotlin:kotlin-gradle-plugin", version.ref = "kotlin" }
 
-test-junit-jupiter = { module = "org.junit.jupiter:junit-jupiter", version.ref = "junit-jupiter" }
-test-junit-jupiter-launcher = { module = "org.junit.jupiter:junit-jupiter-engine" }
+test-junit-bom = { module = "org.junit:junit-bom", version.ref = "junit" }
+test-junit-jupiter = { module = "org.junit.jupiter:junit-jupiter" }
+test-junit-platform-launcher = { module = "org.junit.platform:junit-platform-launcher" }
 test-kotest-assertions = { module = "io.kotest:kotest-assertions-core", version.ref = "kotest" }
 
 

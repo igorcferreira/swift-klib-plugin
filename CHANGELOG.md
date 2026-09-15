@@ -5,7 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased](https://github.com/ttypic/swift-klib-plugin/tree/HEAD)
+## [Unreleased](https://github.com/igorcferreira/swift-klib-plugin/tree/HEAD)
+
+- Support Xcode 27, whose SwiftPM defaults to the Swift Build engine. The destination is now
+  declared with `swift build --sdk/--triple` instead of `-Xswiftc -sdk/-target`, which Swift Build
+  overrode with its own host destination, and build products are read from Xcode's output layout.
+- Raise the default deployment targets to iOS 15 / macOS 12 / tvOS 15; current Xcode releases reject
+  the previous defaults outright.
+- Build with the Java 21 toolchain, and support Gradle 9 (`capitalized()` removal, stricter plugin
+  validation, explicit JUnit Platform launcher).
 
 ## [0.6.4] - 2024-10-13
 
