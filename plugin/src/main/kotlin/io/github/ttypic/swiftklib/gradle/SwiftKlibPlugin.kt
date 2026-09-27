@@ -13,7 +13,7 @@ const val EXTENSION_NAME = "swiftklib"
 
 @Suppress("unused")
 class SwiftKlibPlugin : Plugin<Project> {
-    override fun apply(target: Project) = with(target) {
+    override fun apply(target: Project): Unit = with(target) {
         val objects: ObjectFactory = project.objects
 
         val swiftKlibEntries: NamedDomainObjectContainer<SwiftKlibEntry> =
